@@ -1,0 +1,118 @@
+diff --git a/addons/resource.language.en_gb/resources/strings.po b/addons/resource.language.en_gb/resources/strings.po
+index 03b5894ef4128..92dd7d76e832c 100644
+--- a/addons/resource.language.en_gb/resources/strings.po
++++ b/addons/resource.language.en_gb/resources/strings.po
+@@ -21709,3 +21709,13 @@ msgstr ""
+ msgctxt "#39117"
+ msgid "Verbose logging for the [B]Announcer[/B] component"
+ msgstr ""
++
++#: system/settings/settings.xml
++msgctxt "#39901"
++msgid "Force passthrough for live/realtime streams (dangerous!)"
++msgstr ""
++
++#: system/settings/settings.xml
++msgctxt "#39902"
++msgid "Enables passthrough for live/realtime streams like PVR TV channels. Enable at your own risk, expect problems and don't report issues!"
++msgstr ""
+diff --git a/system/settings/settings.xml b/system/settings/settings.xml
+index 19cfe2db185c8..b27b59809ddb0 100755
+--- a/system/settings/settings.xml
++++ b/system/settings/settings.xml
+@@ -2590,6 +2590,15 @@
+           </dependencies>
+           <control type="toggle" />
+         </setting>
++        <setting id="audiooutput.forcertpassthrough" type="boolean" label="39901" help="39902">
++          <level>3</level>
++          <default>false</default>
++          <dependencies>
++            <dependency type="visible" on="property" name="aesettingvisible" setting="audiooutput.config">audiooutput.passthrough</dependency>
++            <dependency type="enable" setting="audiooutput.passthrough" operator="is">true</dependency>
++          </dependencies>
++          <control type="toggle" />
++        </setting>
+         <setting id="audiooutput.passthroughdevice" type="string" label="546" help="36372">
+           <level>1</level>
+           <default>Default</default> <!-- will be properly set on startup -->
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayerAudio.cpp b/xbmc/cores/VideoPlayer/VideoPlayerAudio.cpp
+index 7b15b42e95020..83caf8144e815 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayerAudio.cpp
++++ b/xbmc/cores/VideoPlayer/VideoPlayerAudio.cpp
+@@ -74,11 +74,16 @@ CVideoPlayerAudio::~CVideoPlayerAudio()
+   // CloseStream(true);
+ }
+ 
++bool CVideoPlayerAudio::AllowRTPassThrough()
++{
++  return CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_AUDIOOUTPUT_FORCERTPASSTHROUGH);
++}
++
+ bool CVideoPlayerAudio::OpenStream(CDVDStreamInfo hints)
+ {
+   CLog::Log(LOGNOTICE, "Finding audio codec for: %i", hints.codec);
+   bool allowpassthrough = !CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEDISPLAYASCLOCK);
+-  if (m_processInfo.IsRealtimeStream())
++  if (!AllowRTPassThrough() && m_processInfo.IsRealtimeStream())
+     allowpassthrough = false;
+ 
+   CAEStreamInfo::DataType streamType = m_audioSink.GetPassthroughStreamType(hints.codec, hints.samplerate);
+@@ -455,8 +460,8 @@ bool CVideoPlayerAudio::ProcessDecoderOutput(DVDAudioFrame &audioframe)
+     }
+ 
+     // if stream switches to realtime, disable pass through
+-    // or switch to resample
+-    if (m_processInfo.IsRealtimeStream() && m_synctype != SYNC_RESAMPLE)
++    // or switch to resample when realtime passthrough is not allowed
++    if (m_processInfo.IsRealtimeStream() && m_synctype != SYNC_RESAMPLE && !AllowRTPassThrough())
+     {
+       m_synctype = SYNC_RESAMPLE;
+       if (SwitchCodecIfNeeded())
+@@ -604,7 +609,7 @@ bool CVideoPlayerAudio::SwitchCodecIfNeeded()
+ {
+   CLog::Log(LOGDEBUG, "CVideoPlayerAudio: stream props changed, checking for passthrough");
+   bool allowpassthrough = !CServiceBroker::GetSettingsComponent()->GetSettings()->GetBool(CSettings::SETTING_VIDEOPLAYER_USEDISPLAYASCLOCK);
+-  if (m_processInfo.IsRealtimeStream() || m_synctype == SYNC_RESAMPLE)
++  if ((!AllowRTPassThrough() && m_processInfo.IsRealtimeStream()) || m_synctype == SYNC_RESAMPLE)
+     allowpassthrough = false;
+ 
+   CAEStreamInfo::DataType streamType = m_audioSink.GetPassthroughStreamType(m_streaminfo.codec, m_streaminfo.samplerate);
+diff --git a/xbmc/cores/VideoPlayer/VideoPlayerAudio.h b/xbmc/cores/VideoPlayer/VideoPlayerAudio.h
+index 5aedd0886d281..8deafe5d0ffab 100644
+--- a/xbmc/cores/VideoPlayer/VideoPlayerAudio.h
++++ b/xbmc/cores/VideoPlayer/VideoPlayerAudio.h
+@@ -104,5 +104,9 @@ class CVideoPlayerAudio : public CThread, public IDVDStreamPlayerAudio
+ 
+   mutable CCriticalSection m_info_section;
+   SInfo            m_info;
++
++private:
++  bool AllowRTPassThrough();
++
+ };
+ 
+diff --git a/xbmc/settings/Settings.cpp b/xbmc/settings/Settings.cpp
+index 829e7b5af6e64..dca9aef3261a7 100644
+--- a/xbmc/settings/Settings.cpp
++++ b/xbmc/settings/Settings.cpp
+@@ -352,6 +352,7 @@ const std::string CSettings::SETTING_AUDIOOUTPUT_STREAMSILENCE = "audiooutput.st
+ const std::string CSettings::SETTING_AUDIOOUTPUT_STREAMNOISE = "audiooutput.streamnoise";
+ const std::string CSettings::SETTING_AUDIOOUTPUT_GUISOUNDMODE = "audiooutput.guisoundmode";
+ const std::string CSettings::SETTING_AUDIOOUTPUT_PASSTHROUGH = "audiooutput.passthrough";
++const std::string CSettings::SETTING_AUDIOOUTPUT_FORCERTPASSTHROUGH = "audiooutput.forcertpassthrough";
+ const std::string CSettings::SETTING_AUDIOOUTPUT_PASSTHROUGHDEVICE = "audiooutput.passthroughdevice";
+ const std::string CSettings::SETTING_AUDIOOUTPUT_AC3PASSTHROUGH = "audiooutput.ac3passthrough";
+ const std::string CSettings::SETTING_AUDIOOUTPUT_AC3TRANSCODE = "audiooutput.ac3transcode";
+diff --git a/xbmc/settings/Settings.h b/xbmc/settings/Settings.h
+index d0743b32d380f..945516a35d62b 100644
+--- a/xbmc/settings/Settings.h
++++ b/xbmc/settings/Settings.h
+@@ -312,6 +312,7 @@ class CSettings : public CSettingsBase, public CSettingCreator, public CSettingC
+   static const std::string SETTING_AUDIOOUTPUT_STREAMNOISE;
+   static const std::string SETTING_AUDIOOUTPUT_GUISOUNDMODE;
+   static const std::string SETTING_AUDIOOUTPUT_PASSTHROUGH;
++  static const std::string SETTING_AUDIOOUTPUT_FORCERTPASSTHROUGH;
+   static const std::string SETTING_AUDIOOUTPUT_PASSTHROUGHDEVICE;
+   static const std::string SETTING_AUDIOOUTPUT_AC3PASSTHROUGH;
+   static const std::string SETTING_AUDIOOUTPUT_AC3TRANSCODE;
